@@ -58,23 +58,29 @@ if [ ! -f "/usr/bin/tun2socks" ]; then
     chmod +x /usr/bin/tun2socks
 fi
 
-# Step 5: Check for existing config in /etc/config/network then add entry
-if ! grep -q "config interface 'tunnel'" /etc/config/network; then
-    echo "
+# Step 5: Remove existing tunnel config and add new entry
+if grep -q "config interface 'tunnel'" /etc/config/network; then
+    echo 'removing existing tunnel config from /etc/config/network'
+    sed -i "/config interface 'tunnel'/,/^$/d" /etc/config/network
+fi
+
+echo "
 config interface 'tunnel'
     option device 'tun1'
     option proto 'static'
     option ipaddr '172.16.10.1'
     option netmask '255.255.255.252'
 " >> /etc/config/network
-    echo 'added entry into /etc/config/network'
-else
-    echo 'found entry into /etc/config/network'
+echo 'added fresh entry into /etc/config/network'
+
+# Step 6: Remove existing proxy config and add new entry
+if grep -q "option name 'proxy'" /etc/config/firewall; then
+    echo 'removing existing proxy config from /etc/config/firewall'
+    sed -i "/option name 'proxy'/,/^$/d" /etc/config/firewall
+    sed -i "/option name 'lan-proxy'/,/^$/d" /etc/config/firewall
 fi
 
-# Step 6: Check for existing config /etc/config/firewall then add entry
-if ! grep -q "option name 'proxy'" /etc/config/firewall; then 
-    echo "
+echo "
 config zone
     option name 'proxy'
     list network 'tunnel'
@@ -92,10 +98,7 @@ config forwarding
     option src 'lan'
     option family 'ipv4'
 " >> /etc/config/firewall
-    echo 'added entry into /etc/config/firewall'
-else
-    echo 'found entry into /etc/config/firewall'
-fi
+echo 'added fresh entry into /etc/config/firewall'
 
 # Step 7: Restart network
 /etc/init.d/network restart
