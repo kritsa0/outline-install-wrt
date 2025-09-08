@@ -70,16 +70,17 @@ config interface 'tunnel'
     option proto 'static'
     option ipaddr '172.16.10.1'
     option netmask '255.255.255.252'
-    option ip6addr 'fced:9999::1/64'
 " >> /etc/config/network
-    echo 'added entry into /etc/config/network'
-else
-    echo 'found entry into /etc/config/network'
+echo 'added fresh entry into /etc/config/network'
+
+# Step 6: Remove existing proxy config and add new entry
+if grep -q "option name 'proxy'" /etc/config/firewall; then
+    echo 'removing existing proxy config from /etc/config/firewall'
+    sed -i "/option name 'proxy'/,/^$/d" /etc/config/firewall
+    sed -i "/option name 'lan-proxy'/,/^$/d" /etc/config/firewall
 fi
 
-# Step 6: Check for existing config /etc/config/firewall then add entry
-if ! grep -q "option name 'proxy'" /etc/config/firewall; then 
-    echo "
+echo "
 config zone
     option name 'proxy'
     list network 'tunnel'
@@ -89,48 +90,25 @@ config zone
     option masq '1'
     option mtu_fix '1'
     option device 'tun1'
+    option family 'ipv4'
 
 config forwarding
     option name 'lan-proxy'
     option dest 'proxy'
     option src 'lan'
+    option family 'ipv4'
 " >> /etc/config/firewall
-    echo 'added entry into /etc/config/firewall'
-else
-    echo 'found entry into /etc/config/firewall'
-fi
+echo 'added fresh entry into /etc/config/firewall'
 
 # Step 7: Restart network
 /etc/init.d/network restart
 echo 'Restarting Network....'
 sleep 3
 
-# Step 8: Read user variable for OUTLINE HOST
-read -p "Enter Outline Server Hostname/IP: " OUTLINEHOST
+# Step 8: Read user variable for OUTLINE HOST IP
+read -p "Enter Outline Server IP: " OUTLINEIP
 # Read user variable for Outline config
 read -p "Enter Outline (Shadowsocks) Config (format ss://base64coded@HOST:PORT/?outline=1): " OUTLINECONF
-
-# Resolve hostname to both IPv4 and IPv6
-echo "Resolving hostname: $OUTLINEHOST"
-OUTLINEIP4=$(nslookup "$OUTLINEHOST" | grep -A1 "Name:" | grep "Address:" | head -1 | awk '{print $2}' 2>/dev/null || echo "")
-OUTLINEIP6=$(nslookup "$OUTLINEHOST" | grep -A10 "Name:" | grep "Address:" | grep ":" | head -1 | awk '{print $2}' 2>/dev/null || echo "")
-
-if [ -z "$OUTLINEIP4" ] && [ -z "$OUTLINEIP6" ]; then
-    # If nslookup fails, try direct IP detection
-    if echo "$OUTLINEHOST" | grep -q ":"; then
-        OUTLINEIP6="$OUTLINEHOST"
-        echo "Detected IPv6 address: $OUTLINEIP6"
-    elif echo "$OUTLINEHOST" | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$"; then
-        OUTLINEIP4="$OUTLINEHOST"
-        echo "Detected IPv4 address: $OUTLINEIP4"
-    else
-        echo "Warning: Could not resolve hostname $OUTLINEHOST"
-        OUTLINEIP4="$OUTLINEHOST"
-    fi
-else
-    [ -n "$OUTLINEIP4" ] && echo "Resolved IPv4: $OUTLINEIP4"
-    [ -n "$OUTLINEIP6" ] && echo "Resolved IPv6: $OUTLINEIP6"
-fi
 
 # Step 9: Check for default gateway and save it into DEFGW
 DEFGW=$(ip route | grep default | awk '{print $3}')
@@ -168,7 +146,6 @@ start_service() {
         fi
         ip link set tun1 up
         ip addr add 172.16.10.1/30 dev tun1
-        ip -6 addr add fced:9999::1/64 dev tun1 2>/dev/null
     fi
     
     # Verify interface is up
@@ -176,7 +153,6 @@ start_service() {
         echo "tun1 interface is not up, bringing it up..."
         ip link set tun1 up
         ip addr add 172.16.10.1/30 dev tun1 2>/dev/null
-        ip -6 addr add fced:9999::1/64 dev tun1 2>/dev/null
     fi
     
     procd_open_instance
@@ -187,19 +163,10 @@ start_service() {
     procd_set_param respawn "\${respawn_threshold:-3600}" "\${respawn_timeout:-5}" "\${respawn_retry:-5}"
     procd_close_instance
     
-    # Add routes to Outline Server (IPv4 and IPv6)
-    if [ -n "$OUTLINEIP4" ] && ! ip route | grep -q "$OUTLINEIP4 via $DEFGW"; then
-        ip route add "$OUTLINEIP4" via "$DEFGW" dev "$DEFIF"
-        echo "IPv4 route to Outline Server added: $OUTLINEIP4"
-    fi
-    
-    if [ -n "$OUTLINEIP6" ]; then
-        DEFGW6=\$(ip -6 route | grep default | awk '{print \$3}' | head -1)
-        DEFIF6=\$(ip -6 route | grep default | awk '{print \$5}' | head -1)
-        if [ -n "$DEFGW6" ] && ! ip -6 route | grep -q "$OUTLINEIP6 via $DEFGW6"; then
-            ip -6 route add "$OUTLINEIP6" via "$DEFGW6" dev "$DEFIF6" 2>/dev/null
-            echo "IPv6 route to Outline Server added: $OUTLINEIP6"
-        fi
+    # Add route to Outline Server
+    if ! ip route | grep -q "$OUTLINEIP via $DEFGW"; then
+        ip route add "$OUTLINEIP" via "$DEFGW"
+        echo 'route to Outline Server added'
     fi
     
     # Save existing default route
@@ -225,18 +192,9 @@ stop_service() {
         ip route restore default < /tmp/defroute.save
     fi
     
-    # Remove routes to OUTLINE Server (IPv4 and IPv6)
-    if [ -n "$OUTLINEIP4" ] && ip route | grep -q "$OUTLINEIP4 via $DEFGW"; then
-        ip route del "$OUTLINEIP4" via "$DEFGW" 2>/dev/null
-        echo "IPv4 route to Outline Server removed"
-    fi
-    
-    if [ -n "$OUTLINEIP6" ]; then
-        DEFGW6=\$(ip -6 route | grep default | awk '{print \$3}' | head -1)
-        if [ -n "$DEFGW6" ] && ip -6 route | grep -q "$OUTLINEIP6 via $DEFGW6"; then
-            ip -6 route del "$OUTLINEIP6" via "$DEFGW6" 2>/dev/null
-            echo "IPv6 route to Outline Server removed"
-        fi
+    # Remove route to OUTLINE Server
+    if ip route | grep -q "$OUTLINEIP via $DEFGW"; then
+        ip route del "$OUTLINEIP" via "$DEFGW"
     fi
     
     # Remove tun1 interface
@@ -274,10 +232,9 @@ service_started() {
     if ip link show tun1 | grep -q "UP"; then
         # Delete existing default route
         ip route del default 2>/dev/null
-        # Create default routes through the proxy (IPv4 and IPv6)
+        # Create default route through the proxy
         ip route add default via 172.16.10.2 dev tun1
-        ip -6 route add default via fced:9999::2 dev tun1 2>/dev/null
-        echo "Default routes set through Outline (IPv4 and IPv6)"
+        echo "Default route set through Outline"
     else
         echo "tun1 interface is not up, cannot set default route"
     fi
@@ -296,12 +253,9 @@ EOL
         
         sed '/exit 0/i\
 sleep 10\
-# Check if default routes are through Outline and change if not\
+# Check if default route is through Outline and change if not\
 if ! ip route | grep -q '\''^default via 172.16.10.2 dev tun1'\''; then\
     /etc/init.d/tun2socks start\
-fi\
-if ! ip -6 route | grep -q '\''^default via fced:9999::2 dev tun1'\''; then\
-    ip -6 route add default via fced:9999::2 dev tun1 2>/dev/null\
 fi\
 ' /etc/rc.local > /tmp/rc.local.tmp && mv /tmp/rc.local.tmp /etc/rc.local
         echo "All traffic will be routed through Outline"
@@ -346,10 +300,8 @@ else
     echo "✗ tun2socks process is not running"
 fi
 
-if [ -n "$OUTLINEIP4" ] && ip route | grep -q "$OUTLINEIP4"; then
-    echo "✓ IPv4 route to Outline server added"
-elif [ -n "$OUTLINEIP6" ] && ip -6 route | grep -q "$OUTLINEIP6"; then
-    echo "✓ IPv6 route to Outline server added"
+if ip route | grep -q "$OUTLINEIP"; then
+    echo "✓ Route to Outline server added"
 else
     echo "✗ Route to Outline server not found"
 fi
@@ -360,15 +312,10 @@ ip route show
 echo ""
 
 if [ "$DEFAULT_GATEWAY" = "y" ]; then
-    IPV4_DEFAULT=$(ip route | grep -q "^default via 172.16.10.2 dev tun1" && echo "yes" || echo "no")
-    IPV6_DEFAULT=$(ip -6 route | grep -q "^default via fced:9999::2 dev tun1" && echo "yes" || echo "no")
-    
-    if [ "$IPV4_DEFAULT" = "yes" ] || [ "$IPV6_DEFAULT" = "yes" ]; then
-        echo "✓ Default route(s) set through Outline"
-        [ "$IPV4_DEFAULT" = "yes" ] && echo "  - IPv4 default route active"
-        [ "$IPV6_DEFAULT" = "yes" ] && echo "  - IPv6 default route active"
+    if ip route | grep -q "^default via 172.16.10.2 dev tun1"; then
+        echo "✓ Default route set through Outline"
     else
-        echo "⚠ Default routes not set through Outline (this may take a moment)"
+        echo "⚠ Default route not set through Outline (this may take a moment)"
     fi
 fi
 
