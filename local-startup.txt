@@ -1,0 +1,9 @@
+echo '#!/bin/sh' > /tmp/tun2socks_restart.sh
+echo '# Script to monitor connection and restart tun2socks if needed' >> /tmp/tun2socks_restart.sh
+echo 'count=$(ping -c5 -w5 172.64.36.1 | grep "100% packet loss" | wc -l)' >> /tmp/tun2socks_restart.sh
+echo 'if [ "$count" -gt 0 ]; then' >> /tmp/tun2socks_restart.sh
+echo '    echo "Network lost, restarting tun2socks..."' >> /tmp/tun2socks_restart.sh
+echo '    /etc/init.d/tun2socks restart' >> /tmp/tun2socks_restart.sh
+echo '    echo "tun2socks restarted"' >> /tmp/tun2socks_restart.sh
+echo 'fi' >> /tmp/tun2socks_restart.sh
+chmod +x /tmp/tun2socks_restart.sh
