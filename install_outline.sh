@@ -73,14 +73,9 @@ config interface 'tunnel'
 " >> /etc/config/network
 echo 'added fresh entry into /etc/config/network'
 
-# Step 6: Remove existing proxy config and add new entry
-if grep -q "option name 'proxy'" /etc/config/firewall; then
-    echo 'removing existing proxy config from /etc/config/firewall'
-    sed -i "/option name 'proxy'/,/^$/d" /etc/config/firewall
-    sed -i "/option name 'lan-proxy'/,/^$/d" /etc/config/firewall
-fi
-
-echo "
+# Step 6: Check for existing config /etc/config/firewall then add entry
+if ! grep -q "option name 'proxy'" /etc/config/firewall; then 
+    echo "
 config zone
     option name 'proxy'
     list network 'tunnel'
@@ -98,7 +93,10 @@ config forwarding
     option src 'lan'
     option family 'ipv4'
 " >> /etc/config/firewall
-echo 'added fresh entry into /etc/config/firewall'
+    echo 'added entry into /etc/config/firewall'
+else
+    echo 'found entry into /etc/config/firewall'
+fi
 
 # Step 7: Restart network
 /etc/init.d/network restart
